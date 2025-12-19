@@ -28,18 +28,23 @@ function Find-WritableFiles {
     [Parameter(Position = 0, Mandatory = $true)]
     [String]
     $location,
-    [Parameter(Position = 1, Mandatory = $true)]
+    [Parameter(Position = 1, Mandatory = $false)]
     [String]
     $fileExt
     )
-  
-  $allGroups = New-Object System.Collections.Generic.List[string]
+
+  # Not using New-Object System.Collections.Generic.List[string]
+  # In case we are in a restricted language mode :
+  # -> Cannot create type. Only core types are supported in this language mode.
+  $allGroups = @{} 
   $whoamiName = whoami
-  $allGroups.Add($whoamiName)
+  $allGroups.add(0, $whoamiName)
   $whoGroups = whoami /groups /fo csv
   $csvGroups = $whoGroups | ConvertFrom-CSV
+  $totalGroups = 1
   foreach($gp in $csvGroups) {
-    $allGroups.add($gp."Group Name")
+    $allGroups.add($totalGroups, $gp."Group Name")
+    $totalGroups++
   }  
 
   Write-Output "********************************************************************************"
@@ -49,23 +54,41 @@ function Find-WritableFiles {
   $allGroups
 
   Write-Output ""
-  Write-Output "Getting list of" $fileExt "files in $location. NOTE: Searching entire drives may take a while."
+  Write-Output "Getting list of $fileExt files in $location. NOTE: Searching entire drives may take a while."
   try {
-    $list = get-childitem $location -recurse -ErrorAction silentlycontinue | where {$_.extension -eq $fileExt} | Select FullName
+    $list = get-childitem $location -recurse -ErrorAction silentlycontinue
+    if ($fileExt) {
+      $list = $list | where {$_.extension -eq $fileExt}
+    }
+    $list = $list | Select FullName
   }
   catch {}
 
-  $results = New-Object System.Collections.Generic.List[string]
+  Write-Output "********************************************************************************"
+  Write-Output "**                           List of Writable Files                           **"
+  Write-Output "********************************************************************************"
+  Write-Output ""
+  
+  $totalResults = 0
+  #$results = @{} #New-Object System.Collections.Generic.List[string]
   Write-Output "Checking access on files and generating list."
   Write-Output ""
-  ForEach($path in $list) {
+  foreach($path in $list) {
     try {
       $file = Get-Item -LiteralPath $path.FullName -Force
-      ForEach($group in $allGroups) {
-        if ((Get-Acl $file).Access | where-object { 
-        ($_.IdentityReference -match [Regex]::Escape($group)) -and (($_.FileSystemRights -match "FullControl") -or ($_.FileSystemRights -match "Write") -or ($_.FileSystemRights -match "Modify"))}) {
-          $results.add($path.FullName)
-          break
+      for($i = 0; $i -lt $totalGroups; $i++) {
+        $group = $allGroups.$i
+        $rights = @("FullControl", "Write", "Modify")
+        $groupRights = (Get-Acl $file).Access | where-object { ($_.IdentityReference -match [Regex]::Escape($group)) }
+        :outer foreach($groupRight in $groupRights) {
+          foreach($right in $rights) {
+            if ($groupRight.FileSystemRights -match $right) {
+              Write-Output "[+] $group : '$right' - '$file'"
+              #$results.add($totalResults, "$file")
+              #$totalResults++
+              break outer
+            }
+          }
         }
       }
     }
@@ -76,10 +99,9 @@ function Find-WritableFiles {
     }
   }
   
-  Write-Output "********************************************************************************"
-  Write-Output "**                           List of Writable Files                           **"
-  Write-Output "********************************************************************************"
-  Write-Output ""
-  $results
+  #for($i = 0; $i -lt $totalResults; $i++) {
+  #  $results.$i
+  #}
+
 
 }
